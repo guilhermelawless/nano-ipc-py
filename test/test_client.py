@@ -1,4 +1,5 @@
 import nano_ipc
+import asyncio
 
 
 if __name__ == "__main__":
@@ -14,8 +15,9 @@ if __name__ == "__main__":
     else:
         for request in requests:
             try:
-                response = client.request(request)
-                print("Request:\n\t{}\nResponse:\n\t{}\n\n----\n".format(request, response))
+                loop = asyncio.get_event_loop()
+                print("Request:\n\t{}\nResponse:\n\t{}\n\n----\n".format(request, loop.run_until_complete(client.request((request)))))
+                loop.close()
             except nano_ipc.BadResponse as e:
                 # print(e.response_raw)
                 print(e)
