@@ -17,7 +17,7 @@ class Client(object):
         if isinstance(self.__addr, str):
             address_family = socket.AF_UNIX
         else:
-            address_family = socket.AF_INET
+            address_family = socket.AF_INET6
         self.__sock = socket.socket(address_family, socket.SOCK_STREAM)
         self.set_timeout(timeout)
         self.connected = False
