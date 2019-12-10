@@ -5,7 +5,7 @@ setup(
     description='An IPC client for the Nano currency',
     url='https://github.com/guilhermelawless/nano-ipc-py',
     author='Guilherme Lawless',
-    author_email='guilherme.lawless@tecnico.ulisboa.pt',
+    author_email='guilherme@nano.org',
     classifiers=[
         #   3 - Alpha
         #   4 - Beta
