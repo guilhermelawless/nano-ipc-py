@@ -1,3 +1,4 @@
+import asyncio
 import socket
 import struct
 import json
@@ -12,64 +13,110 @@ class NanoIPC(object):
 
 
 class Client(object):
-    def __init__(self, server_address, timeout=15):
+    def __init__(self, server_address, max_connections=10, timeout=15, loop=asyncio.get_event_loop()):
+        """
+        Creates a client handler for TCP or Unix domain socket connections
+
+        :param server_address: Either a tuple (host, port) for a TCP connection, or a path for Unix domain sockets
+        """
         self.__addr = server_address
-        if isinstance(self.__addr, str):
-            address_family = socket.AF_UNIX
+        self.__loop = loop
+        self.__timeout = timeout
+        if max_connections > 100:
+            raise Exception('No more than 100 connections')
+        self.__max_connections = max_connections
+        self.__connections = [None] * max_connections
+        self.__queue = asyncio.LifoQueue(max_connections)
+        for i in range(0, max_connections):
+            self.__queue.put_nowait(i)
+
+    async def __new_connection(self, pos):
+        if not isinstance(self.__addr, tuple):
+            conn = asyncio.open_unix_connection(path=self.__addr, loop=self.__loop)
         else:
-            address_family = socket.AF_INET6
-        self.__sock = socket.socket(address_family, socket.SOCK_STREAM)
-        self.set_timeout(timeout)
-        self.connected = False
+            conn = asyncio.open_connection(host=self.__addr[0], port=self.__addr[1], loop=self.__loop)
+        connection = await asyncio.wait_for(conn, 3)
+        self.__connections[pos] = connection
+        return connection
 
-    def connect(self):
-        if not self.connected:
-            try:
-                self.__sock.connect(self.__addr)
-                self.connected = True
-            except FileNotFoundError:
-                raise ConnectionFailure("Could not connect to socket at {}".format(self.__addr))
-
-    def close(self):
-        if self.connected:
-            self.__sock.close()
-            self.connected = False
-
-    def set_timeout(self, timeout):
-        self.__sock.settimeout(timeout)
-
-    def request(self, req):
-        if not self.connected:
-            self.connect()
+    async def __get_connection(self, pos):
         try:
-            data = json.dumps(req).encode('utf-8')
-        except TypeError:
-            raise BadRequest("Request must be JSON serializable")
-
-        self.__sock.sendall(NanoIPC.PACKED_PREAMBLE)
-        self.__sock.sendall(struct.pack('>I', len(data)))
-        self.__sock.sendall(data)
-
-        header = self.__sock.recv(4)
-        if len(header) == 0:
+            connection = self.__connections[pos]
+        except IndexError:
+            connection = None
+        if not connection:
+            connection = await self.__new_connection(pos)
+        if not connection:
             raise ConnectionClosed()
-        size = struct.unpack('>I', header)[0]
-        data = self.__sock.recv(size)
-        if len(data) == 0:
-            raise ConnectionClosed()
+        return connection
 
+    def __close_one(self, pos):
+        connection = self.__connections[pos]
+        if connection is None:
+            return False
+        _, writer = connection
         try:
-            data_js = json.loads(data)
-        except json.decoder.JSONDecodeError:
-            raise BadResponse("Could not deserialize response", data)
-        return data_js
+            writer.close()
+        except Exception as e:
+            print(e)
+        finally:
+            self.__connections[pos] = None
 
-    def __enter__(self):
-        self.connect()
-        return self
+    async def close(self):
+        for i in range(len(self.__connections)):
+            self.__close_one(i)
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
+    async def request(self, req):
+        pos = None
+        try:
+            handle_json = not isinstance(req, bytes)
+            if handle_json:
+                try:
+                    data = json.dumps(req).encode('utf-8')
+                except TypeError:
+                    raise BadRequest("Request must be a string or JSON serializable")
+            else:
+                data = req
 
-    def __del__(self):
-        self.close()
+            pos = await self.__queue.get()
+
+            reader, writer = await self.__get_connection(pos)
+
+            await writer.drain()
+            # https://docs.nano.org/integration-guides/advanced/#ipc-requestresponse-format
+            writer.writelines([
+                NanoIPC.PACKED_PREAMBLE,
+                struct.pack('>I', len(data)),
+                data
+            ])
+
+            header = await reader.read(4)
+            if len(header) == 0:
+                raise ConnectionClosed()
+            size = struct.unpack('>I', header)[0]
+            data = await reader.read(size)
+            if len(data) == 0:
+                raise ConnectionClosed()
+
+            self.__queue.put_nowait(pos)
+
+            if handle_json:
+                try:
+                    data_js = json.loads(data)
+                except json.decoder.JSONDecodeError:
+                    raise BadResponse("Could not deserialize response", data)
+                return data_js
+            else:
+                return data
+        except ConnectionClosed:
+            if pos:
+                self.close_one(pos)
+            await asyncio.sleep(1)
+            response_again = await self.request(req)
+            return response_again
+
+    async def __aenter__(self):
+        pass
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close()
