@@ -82,7 +82,7 @@ class Client(object):
 
             reader, writer = await self.__get_connection(pos)
 
-            await writer.drain()
+            await asyncio.wait_for(writer.drain(), self.__timeout)
             # https://docs.nano.org/integration-guides/advanced/#ipc-requestresponse-format
             writer.writelines([
                 NanoIPC.PACKED_PREAMBLE,
@@ -90,15 +90,13 @@ class Client(object):
                 data
             ])
 
-            header = await reader.read(4)
+            header = await asyncio.wait_for(reader.read(4), self.__timeout)
             if len(header) == 0:
                 raise ConnectionClosed()
             size = struct.unpack('>I', header)[0]
-            data = await reader.read(size)
+            data = await asyncio.wait_for(reader.read(size), self.__timeout)
             if len(data) == 0:
                 raise ConnectionClosed()
-
-            self.__queue.put_nowait(pos)
 
             if handle_json:
                 try:
@@ -110,10 +108,12 @@ class Client(object):
                 return data
         except ConnectionClosed:
             if pos:
-                self.close_one(pos)
+                self.__close_one(pos)
             await asyncio.sleep(1)
             response_again = await self.request(req)
             return response_again
+        finally:
+            self.__queue.put_nowait(pos)
 
     async def __aenter__(self):
         pass
