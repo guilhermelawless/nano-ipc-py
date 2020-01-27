@@ -1,3 +1,4 @@
+import asyncio
 import socket
 import struct
 import json
@@ -22,33 +23,33 @@ class Client(object):
         self.set_timeout(timeout)
         self.connected = False
 
-    def connect(self):
+    async def connect(self):
         if not self.connected:
             try:
-                self.__sock.connect(self.__addr)
+                await self.__sock.connect(self.__addr)
                 self.connected = True
             except FileNotFoundError:
                 raise ConnectionFailure("Could not connect to socket at {}".format(self.__addr))
 
-    def close(self):
+    async def close(self):
         if self.connected:
-            self.__sock.close()
+            await self.__sock.close()
             self.connected = False
 
-    def set_timeout(self, timeout):
-        self.__sock.settimeout(timeout)
+    async def set_timeout(self, timeout):
+        await self.__sock.settimeout(timeout)
 
-    def request(self, req):
+    async def request(self, req):
         if not self.connected:
-            self.connect()
+            await self.connect()
         try:
             data = json.dumps(req).encode('utf-8')
         except TypeError:
             raise BadRequest("Request must be JSON serializable")
 
-        self.__sock.sendall(NanoIPC.PACKED_PREAMBLE)
-        self.__sock.sendall(struct.pack('>I', len(data)))
-        self.__sock.sendall(data)
+        await self.__sock.sendall(NanoIPC.PACKED_PREAMBLE)
+        await self.__sock.sendall(struct.pack('>I', len(data)))
+        await self.__sock.sendall(data)
 
         header = self.__sock.recv(4)
         if len(header) == 0:
@@ -64,12 +65,12 @@ class Client(object):
             raise BadResponse("Could not deserialize response", data)
         return data_js
 
-    def __enter__(self):
-        self.connect()
+    async def __enter__(self):
+        await self.connect()
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.close()
+    async def __exit__(self, exc_type, exc_value, traceback):
+        await self.close()
 
-    def __del__(self):
-        self.close()
+    async def __del__(self):
+        await self.close()
